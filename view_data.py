@@ -1,6 +1,7 @@
 import ZODB, ZODB.FileStorage
+from models import Person 
 
-# Mở file mydata.fs
+
 storage = ZODB.FileStorage.FileStorage("mydata.fs")
 db = ZODB.DB(storage)
 connection = db.open()
