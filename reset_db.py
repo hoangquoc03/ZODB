@@ -10,4 +10,4 @@ for f in files:
     else:
         print(f"Không tìm thấy {f}")
 
-print("✔ Database đã được reset.")
+print("Database đã được reset.")
