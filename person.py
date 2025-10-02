@@ -21,3 +21,4 @@ print("Saved:", root["person"].name, root["person"].age)
 # Đóng kết nối
 connection.close()
 db.close()
+ 
