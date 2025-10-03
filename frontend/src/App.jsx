@@ -35,16 +35,20 @@ export default function App() {
       const res = await axios.post(`http://127.0.0.1:5000/people/${id}/undo`);
       console.log("Undo:", res.data);
       loadPeople();
+      setHistory(res.data.history); // 👈 lấy từ response
+      setShowHistoryId(id); // tự fetch history
     } catch (err) {
       alert("Không thể undo: " + err.response.data.error);
     }
   };
-  // Redo
+
   const redoPerson = async (id) => {
     try {
       const res = await axios.post(`http://127.0.0.1:5000/people/${id}/redo`);
       console.log("Redo:", res.data);
       loadPeople();
+      setHistory(res.data.history); // 👈 lấy từ response
+      setShowHistoryId(id); // tự fetch history
     } catch (err) {
       alert("Không thể redo: " + err.response.data.error);
     }
@@ -247,7 +251,7 @@ export default function App() {
               <h3>Lịch sử phiên bản của {showHistoryId}</h3>
               <ul>
                 {history.map((h, i) => (
-                  <li key={i}>
+                  <li key={i} className="history">
                     {i + 1}. {h.name} - {h.age}
                   </li>
                 ))}

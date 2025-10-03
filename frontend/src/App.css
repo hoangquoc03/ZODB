@@ -343,3 +343,10 @@ button {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
 }
+.modal-overlay > .modal > ul > li,
+.modal-overlay > .modal > h3 {
+  color: black;
+}
+.modal-overlay > .modal > ul > li {
+  list-style-type: none;
+}

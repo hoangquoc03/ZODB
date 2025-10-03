@@ -1,0 +1,15 @@
+# ZODB lock + temp files
+*.fs.lock
+*.fs.tmp
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual env
+.venv/
+env/
+
+# VSCode settings
+.vscode/

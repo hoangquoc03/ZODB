@@ -22,12 +22,13 @@ if "redo_stack" not in root:
     root["redo_stack"] = OOBTree()  # Lưu redo version cho mỗi person
 
 # ---- Helper functions ----
-def save_version(pid, person):
+def save_version(pid, person, clear_redo=True):
     if pid not in root["versions"]:
         root["versions"][pid] = []
     root["versions"][pid].append({"name": person.name, "age": person.age})
-    # Khi có version mới, xóa redo stack
-    root["redo_stack"][pid] = []
+    # Chỉ xóa redo khi có thao tác update thực sự
+    if clear_redo:
+        root["redo_stack"][pid] = []
     transaction.commit()
 
 def push_redo(pid, version):
@@ -53,12 +54,24 @@ def update_person(pid):
         return jsonify({"error": "Not found"}), 404
     data = request.json
     person = root["people"][pid]
-    # Trước khi update, push version hiện tại vào redo
-    push_redo(pid, {"name": person.name, "age": person.age})
+
+    # Lưu bản hiện tại vào history trước khi sửa
+    if pid not in root["versions"]:
+        root["versions"][pid] = []
+    root["versions"][pid].append({"name": person.name, "age": person.age})
+
+    # Khi có update mới thì reset redo_stack
+    root["redo_stack"][pid] = []
+
+    # Thực hiện thay đổi
     person.name = data.get("name", person.name)
     person.age = int(data.get("age", person.age))
-    save_version(pid, person)
-    return jsonify({"status": "updated"})
+
+    # Lưu bản mới vào history
+    root["versions"][pid].append({"name": person.name, "age": person.age})
+    transaction.commit()
+
+    return jsonify({"status": "updated", "current_version": {"name": person.name, "age": person.age}})
 
 @app.route("/people", methods=["GET"])
 def get_people():
@@ -95,36 +108,51 @@ def replication_status():
         "node_C": "error",
     }))
 
-# ---- Undo / Redo phân tán ----
-@app.route("/people/<pid>/undo", methods=["POST"])
+@app.route("/people/<pid>/undo", methods=["GET","POST"])
 def undo_person(pid):
     if pid not in root["people"] or pid not in root["versions"]:
         return jsonify({"error": "Not found"}), 404
+
     versions = root["versions"][pid]
     if len(versions) < 2:
         return jsonify({"error": "No undo"}), 400
-    # Lấy version hiện tại đẩy vào redo stack
+
+    # Lấy bản hiện tại đưa vào redo stack
     current_version = versions.pop()
-    push_redo(pid, current_version)
+    if pid not in root["redo_stack"]:
+        root["redo_stack"][pid] = []
+    root["redo_stack"][pid].append(current_version)
+
+    # Quay lại bản trước đó
     last_version = versions[-1]
     person = root["people"][pid]
     person.name = last_version["name"]
     person.age = last_version["age"]
+
     transaction.commit()
-    return jsonify({"status": "undo", "current_version": last_version})
+    return jsonify({"status": "undo", "current_version": last_version ,"history": versions})
+
 
 @app.route("/people/<pid>/redo", methods=["GET","POST"])
 def redo_person(pid):
     if pid not in root["people"] or pid not in root["redo_stack"]:
         return jsonify({"error": "No redo"}), 404
+
     if len(root["redo_stack"][pid]) == 0:
-        return jsonify({"error": "Redo stack trống"}), 400
+        return jsonify({"error": "Redo stack empty"}), 400
+
+    # Lấy lại bản từ redo stack
     version = root["redo_stack"][pid].pop()
     person = root["people"][pid]
     person.name = version["name"]
     person.age = version["age"]
-    save_version(pid, person)
-    return jsonify({"status": "redo", "current_version": version})
+
+    # Sau khi redo, push vào history (không reset redo stack)
+    root["versions"][pid].append({"name": person.name, "age": person.age})
+
+    transaction.commit()
+    return jsonify({"status": "redo", "current_version": version,"history": root["versions"][pid]})
+
 @app.route("/replicate", methods=["POST"])
 def replicate():
     """
@@ -148,6 +176,8 @@ def person_history(pid):
     if pid not in root["versions"]:
         return jsonify({"error": "No history"}), 404
     return jsonify(root["versions"][pid])
-# ---- Run server ----
+
+
+
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
