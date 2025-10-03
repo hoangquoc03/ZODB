@@ -5,9 +5,12 @@ import axios from "axios";
 export default function App() {
   const [people, setPeople] = useState([]);
   const [editId, setEditId] = useState(null);
+  const [replication, setReplication] = useState({});
   const [name, setName] = useState("");
   const [age, setAge] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [showHistoryId, setShowHistoryId] = useState(null);
   const loadPeople = async () => {
     try {
       const res = await axios.get("http://127.0.0.1:5000/people");
@@ -17,11 +20,46 @@ export default function App() {
       console.error("Lỗi khi gọi API:", err);
     }
   };
+  const loadReplicationStatus = async () => {
+    const res = await axios.get("http://127.0.0.1:5000/replication-status");
+    setReplication(res.data);
+  };
 
   useEffect(() => {
     loadPeople();
+    loadReplicationStatus();
   }, []);
 
+  const undoPerson = async (id) => {
+    try {
+      const res = await axios.post(`http://127.0.0.1:5000/people/${id}/undo`);
+      console.log("Undo:", res.data);
+      loadPeople();
+    } catch (err) {
+      alert("Không thể undo: " + err.response.data.error);
+    }
+  };
+  // Redo
+  const redoPerson = async (id) => {
+    try {
+      const res = await axios.post(`http://127.0.0.1:5000/people/${id}/redo`);
+      console.log("Redo:", res.data);
+      loadPeople();
+    } catch (err) {
+      alert("Không thể redo: " + err.response.data.error);
+    }
+  };
+
+  // Xem lịch sử version
+  const viewHistory = async (id) => {
+    try {
+      const res = await axios.get(`http://127.0.0.1:5000/people/${id}/history`);
+      setHistory(res.data);
+      setShowHistoryId(id);
+    } catch {
+      alert("Không có lịch sử cho " + id);
+    }
+  };
   const deletePerson = async (id) => {
     await axios.delete(`http://127.0.0.1:5000/people/${id}`);
     loadPeople();
@@ -67,6 +105,18 @@ export default function App() {
     setAge("");
     setShowForm(false);
   };
+  // Hàm chạy replication
+  const runReplication = async () => {
+    try {
+      const res = await axios.post("http://127.0.0.1:5000/replicate", {
+        nodes: ["node_A", "node_B", "node_C"],
+      });
+      console.log("Replication:", res.data);
+      loadReplicationStatus(); // Cập nhật lại trạng thái
+    } catch {
+      alert("Lỗi replication");
+    }
+  };
 
   return (
     <div className="app-container">
@@ -77,6 +127,32 @@ export default function App() {
 
       <div className="content">
         <h2> Danh sách nhân viên</h2>
+        <div className="replication-status">
+          <h4>Replication Status</h4>
+          {Object.entries(replication).map(([node, status]) => (
+            <div key={node} className={`status-item ${status}`}>
+              <span className="node-name">{node}</span>
+              <span className="status-icon">
+                {status === "synced"
+                  ? "✔️"
+                  : status === "pending"
+                  ? "⏳"
+                  : "❌"}
+              </span>
+              <span className="status-text">
+                {status === "synced"
+                  ? "Đã đồng bộ"
+                  : status === "pending"
+                  ? "Đang đồng bộ"
+                  : "Lỗi"}
+              </span>
+            </div>
+          ))}
+          <button onClick={runReplication} className="btn-replicate">
+            Chạy Replication
+          </button>
+        </div>
+
         <button className="btn-add" onClick={openAddForm}>
           Thêm nhân viên
         </button>
@@ -107,6 +183,24 @@ export default function App() {
                     </button>
                     <button onClick={() => startEdit(p)} className="btn-edit">
                       Sửa
+                    </button>
+                    <button
+                      onClick={() => undoPerson(p.id)}
+                      className="btn-undo"
+                    >
+                      Undo
+                    </button>
+                    <button
+                      onClick={() => redoPerson(p.id)}
+                      className="btn-redo"
+                    >
+                      Redo
+                    </button>
+                    <button
+                      onClick={() => viewHistory(p.id)}
+                      className="btn-history"
+                    >
+                      Lịch sử
                     </button>
                   </td>
                 </tr>
@@ -144,6 +238,26 @@ export default function App() {
                   Hủy
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+        {showHistoryId && (
+          <div className="modal-overlay">
+            <div className="modal">
+              <h3>Lịch sử phiên bản của {showHistoryId}</h3>
+              <ul>
+                {history.map((h, i) => (
+                  <li key={i}>
+                    {i + 1}. {h.name} - {h.age}
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => setShowHistoryId(null)}
+                className="btn-cancel"
+              >
+                Đóng
+              </button>
             </div>
           </div>
         )}
