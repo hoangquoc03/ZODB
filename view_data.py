@@ -1,9 +1,11 @@
 import ZODB, ZODB.FileStorage
 from models import Person 
 
-
+# Khởi tạo nơi lưu trữ (FileStorage)
 storage = ZODB.FileStorage.FileStorage("mydata.fs")
+# Tạo cơ sở dữ liệu
 db = ZODB.DB(storage)
+# Mở kết nối
 connection = db.open()
 root = connection.root()
 

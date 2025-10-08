@@ -155,9 +155,6 @@ def redo_person(pid):
 
 @app.route("/replicate", methods=["POST"])
 def replicate():
-    """
-    Mô phỏng replication: đồng bộ toàn bộ people sang các node khác
-    """
     data = request.json
     target_nodes = data.get("nodes", ["node_A", "node_B", "node_C"])
     result = {}
@@ -170,7 +167,7 @@ def replicate():
     transaction.commit()
     return jsonify({"status": "replication started", "nodes": result}) 
 
-# ---- Xem lịch sử phiên bản ----
+
 @app.route("/people/<pid>/history", methods=["GET"])
 def person_history(pid):
     if pid not in root["versions"]:

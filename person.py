@@ -2,9 +2,11 @@ import ZODB, ZODB.FileStorage, transaction, persistent
 
 from models import Person 
 
-# Tạo file database ZODB
+# Khởi tạo nơi lưu trữ
 storage = ZODB.FileStorage.FileStorage("mydata.fs")
+# Tạo cơ sở dữ liệu
 db = ZODB.DB(storage)
+# Mở kết nối và truy cập root
 connection = db.open()
 root = connection.root()
 

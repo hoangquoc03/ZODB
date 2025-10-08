@@ -35,8 +35,8 @@ export default function App() {
       const res = await axios.post(`http://127.0.0.1:5000/people/${id}/undo`);
       console.log("Undo:", res.data);
       loadPeople();
-      setHistory(res.data.history); // 👈 lấy từ response
-      setShowHistoryId(id); // tự fetch history
+      setHistory(res.data.history);
+      setShowHistoryId(id);
     } catch (err) {
       alert("Không thể undo: " + err.response.data.error);
     }
@@ -47,14 +47,13 @@ export default function App() {
       const res = await axios.post(`http://127.0.0.1:5000/people/${id}/redo`);
       console.log("Redo:", res.data);
       loadPeople();
-      setHistory(res.data.history); // 👈 lấy từ response
-      setShowHistoryId(id); // tự fetch history
+      setHistory(res.data.history);
+      setShowHistoryId(id);
     } catch (err) {
       alert("Không thể redo: " + err.response.data.error);
     }
   };
 
-  // Xem lịch sử version
   const viewHistory = async (id) => {
     try {
       const res = await axios.get(`http://127.0.0.1:5000/people/${id}/history`);
@@ -82,6 +81,7 @@ export default function App() {
     });
     setName("");
     setAge("");
+    setShowForm(false);
     loadPeople();
   };
 
@@ -94,6 +94,7 @@ export default function App() {
     setEditId(null);
     setName("");
     setAge("");
+    setShowForm(false);
     loadPeople();
   };
   const openAddForm = () => {
@@ -109,14 +110,14 @@ export default function App() {
     setAge("");
     setShowForm(false);
   };
-  // Hàm chạy replication
+
   const runReplication = async () => {
     try {
       const res = await axios.post("http://127.0.0.1:5000/replicate", {
         nodes: ["node_A", "node_B", "node_C"],
       });
       console.log("Replication:", res.data);
-      loadReplicationStatus(); // Cập nhật lại trạng thái
+      loadReplicationStatus();
     } catch {
       alert("Lỗi replication");
     }
