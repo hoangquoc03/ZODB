@@ -11,18 +11,26 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [history, setHistory] = useState([]);
   const [showHistoryId, setShowHistoryId] = useState(null);
+  const [isNodeDown, setIsNodeDown] = useState(false);
+
+  const API = "http://127.0.0.1:5000";
+
   const loadPeople = async () => {
     try {
-      const res = await axios.get("http://127.0.0.1:5000/people");
-      console.log("API trả về:", res.data);
+      const res = await axios.get(`${API}/people`);
       setPeople(res.data);
     } catch (err) {
       console.error("Lỗi khi gọi API:", err);
     }
   };
+
   const loadReplicationStatus = async () => {
-    const res = await axios.get("http://127.0.0.1:5000/replication-status");
-    setReplication(res.data);
+    try {
+      const res = await axios.get(`${API}/replication-status`);
+      setReplication(res.data);
+    } catch (err) {
+      console.error("Lỗi lấy replication:", err);
+    }
   };
 
   useEffect(() => {
@@ -30,10 +38,10 @@ export default function App() {
     loadReplicationStatus();
   }, []);
 
+  // ==== Undo / Redo / CRUD ====
   const undoPerson = async (id) => {
     try {
-      const res = await axios.post(`http://127.0.0.1:5000/people/${id}/undo`);
-      console.log("Undo:", res.data);
+      const res = await axios.post(`${API}/people/${id}/undo`);
       loadPeople();
       setHistory(res.data.history);
       setShowHistoryId(id);
@@ -44,8 +52,7 @@ export default function App() {
 
   const redoPerson = async (id) => {
     try {
-      const res = await axios.post(`http://127.0.0.1:5000/people/${id}/redo`);
-      console.log("Redo:", res.data);
+      const res = await axios.post(`${API}/people/${id}/redo`);
       loadPeople();
       setHistory(res.data.history);
       setShowHistoryId(id);
@@ -56,29 +63,29 @@ export default function App() {
 
   const viewHistory = async (id) => {
     try {
-      const res = await axios.get(`http://127.0.0.1:5000/people/${id}/history`);
+      const res = await axios.get(`${API}/people/${id}/history`);
       setHistory(res.data);
       setShowHistoryId(id);
     } catch {
       alert("Không có lịch sử cho " + id);
     }
   };
+
   const deletePerson = async (id) => {
-    await axios.delete(`http://127.0.0.1:5000/people/${id}`);
+    await axios.delete(`${API}/people/${id}`);
     loadPeople();
   };
+
   const startEdit = (p) => {
     setEditId(p.id);
     setName(p.name);
     setAge(p.age);
     setShowForm(true);
   };
+
   const addPerson = async () => {
     if (!name || !age) return alert("Nhập đủ thông tin");
-    await axios.post("http://127.0.0.1:5000/people", {
-      name,
-      age: parseInt(age),
-    });
+    await axios.post(`${API}/people`, { name, age: parseInt(age) });
     setName("");
     setAge("");
     setShowForm(false);
@@ -87,7 +94,7 @@ export default function App() {
 
   const updatePerson = async () => {
     if (!editId) return;
-    await axios.put(`http://127.0.0.1:5000/people/${editId}`, {
+    await axios.put(`${API}/people/${editId}`, {
       name,
       age: parseInt(age),
     });
@@ -97,6 +104,7 @@ export default function App() {
     setShowForm(false);
     loadPeople();
   };
+
   const openAddForm = () => {
     setEditId(null);
     setName("");
@@ -111,15 +119,37 @@ export default function App() {
     setShowForm(false);
   };
 
+  // ==== Phân tán ====
   const runReplication = async () => {
     try {
-      const res = await axios.post("http://127.0.0.1:5000/replicate", {
+      const res = await axios.post(`${API}/run-replication`, {
         nodes: ["node_A", "node_B", "node_C"],
       });
       console.log("Replication:", res.data);
       loadReplicationStatus();
+      alert("Replication đã khởi chạy!");
     } catch {
       alert("Lỗi replication");
+    }
+  };
+
+  const disconnectNode = async () => {
+    try {
+      await axios.post(`${API}/failover/disconnect`);
+      setIsNodeDown(true);
+      alert("Node chính đã bị ngắt kết nối!");
+    } catch {
+      alert("Lỗi khi ngắt kết nối node chính");
+    }
+  };
+
+  const reconnectNode = async () => {
+    try {
+      await axios.post(`${API}/failover/reconnect`);
+      setIsNodeDown(false);
+      alert("Node chính đã được khôi phục!");
+    } catch {
+      alert("Lỗi khi khôi phục node chính");
     }
   };
 
@@ -153,9 +183,25 @@ export default function App() {
               </span>
             </div>
           ))}
-          <button onClick={runReplication} className="btn-replicate">
-            Chạy Replication
-          </button>
+          <div className="replication-buttons">
+            <button onClick={runReplication} className="btn-replicate">
+              🔄 Chạy Replication
+            </button>
+            <button
+              onClick={disconnectNode}
+              className="btn-fail"
+              disabled={isNodeDown}
+            >
+              ❌ Mất kết nối node chính
+            </button>
+            <button
+              onClick={reconnectNode}
+              className="btn-recover"
+              disabled={!isNodeDown}
+            >
+              ✅ Khôi phục node chính
+            </button>
+          </div>
         </div>
 
         <button className="btn-add" onClick={openAddForm}>
@@ -214,6 +260,7 @@ export default function App() {
           </table>
         )}
 
+        {/* FORM */}
         {showForm && (
           <div className="modal-overlay">
             <div className="modal">
@@ -246,6 +293,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* LỊCH SỬ */}
         {showHistoryId && (
           <div className="modal-overlay">
             <div className="modal">

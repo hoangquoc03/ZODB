@@ -1,32 +1,71 @@
 from flask import Flask, request, jsonify
+import os, shutil, random
 import ZODB, ZODB.FileStorage, transaction
 from BTrees.OOBTree import OOBTree
+from persistent import Persistent
 from models import Person
-from flask_cors import CORS  
+from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app) 
+CORS(app)
 
-# Kết nối ZODB
-storage = ZODB.FileStorage.FileStorage("mydata.fs")
-db = ZODB.DB(storage)
-connection = db.open()
-root = connection.root()
+# ============================
+# --- Distributed Config ----
+# ============================
+DATA_DIR = "data"
+NODES = ["node_A", "node_B", "node_C"]
+PRIMARY_NODE = "node_A"
+replication_status = {n: "synced" for n in NODES}
 
-# Khởi tạo OOBTree cho people và versions
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# ============================
+# --- Helper: DB Management ---
+# ============================
+def get_db_path(node):
+    return os.path.join(DATA_DIR, f"{node}.fs")
+
+def open_db(node):
+    path = get_db_path(node)
+    storage = ZODB.FileStorage.FileStorage(path)
+    db = ZODB.DB(storage)
+    conn = db.open()
+    root = conn.root()
+    return db, conn, root
+
+def ensure_node_init(node):
+    path = get_db_path(node)
+    if not os.path.exists(path):
+        db, conn, root = open_db(node)
+        root["people"] = OOBTree()
+        root["versions"] = OOBTree()
+        root["redo_stack"] = OOBTree()
+        transaction.commit()
+        conn.close()
+        db.close()
+
+for n in NODES:
+    ensure_node_init(n)
+
+# ============================
+# --- Core DB (Primary Node) ---
+# ============================
+db, connection, root = open_db(PRIMARY_NODE)
+
 if "people" not in root:
     root["people"] = OOBTree()
 if "versions" not in root:
     root["versions"] = OOBTree()
 if "redo_stack" not in root:
-    root["redo_stack"] = OOBTree()  # Lưu redo version cho mỗi person
+    root["redo_stack"] = OOBTree()
 
-# ---- Helper functions ----
+# ============================
+# --- Helper functions ---
+# ============================
 def save_version(pid, person, clear_redo=True):
     if pid not in root["versions"]:
         root["versions"][pid] = []
     root["versions"][pid].append({"name": person.name, "age": person.age})
-    # Chỉ xóa redo khi có thao tác update thực sự
     if clear_redo:
         root["redo_stack"][pid] = []
     transaction.commit()
@@ -37,7 +76,9 @@ def push_redo(pid, version):
     root["redo_stack"][pid].append(version)
     transaction.commit()
 
-# ---- CRUD + Versioning ----
+# ============================
+# --- CRUD & Versioning ---
+# ============================
 @app.route("/people", methods=["POST"])
 def add_person():
     data = request.json
@@ -55,19 +96,14 @@ def update_person(pid):
     data = request.json
     person = root["people"][pid]
 
-    # Lưu bản hiện tại vào history trước khi sửa
+    # Save current before update
     if pid not in root["versions"]:
         root["versions"][pid] = []
     root["versions"][pid].append({"name": person.name, "age": person.age})
-
-    # Khi có update mới thì reset redo_stack
     root["redo_stack"][pid] = []
 
-    # Thực hiện thay đổi
     person.name = data.get("name", person.name)
     person.age = int(data.get("age", person.age))
-
-    # Lưu bản mới vào history
     root["versions"][pid].append({"name": person.name, "age": person.age})
     transaction.commit()
 
@@ -79,13 +115,6 @@ def get_people():
     for key, person in root["people"].items():
         people.append({"id": key, "name": person.name, "age": person.age})
     return jsonify(people)
-
-@app.route("/people/<pid>", methods=["GET"])
-def get_person(pid):
-    if pid not in root["people"]:
-        return jsonify({"error": "Not found"}), 404
-    p = root["people"][pid]
-    return jsonify({"id": pid, "name": p.name, "age": p.age})
 
 @app.route("/people/<pid>", methods=["DELETE"])
 def delete_person(pid):
@@ -99,16 +128,10 @@ def delete_person(pid):
     transaction.commit()
     return jsonify({"status": "deleted"})
 
-# ---- Replication Status Notification ----
-@app.route("/replication-status", methods=["GET"])
-def replication_status():
-    return jsonify(root.get("last_replication", {
-        "node_A": "synced",
-        "node_B": "pending",
-        "node_C": "error",
-    }))
-
-@app.route("/people/<pid>/undo", methods=["GET","POST"])
+# ============================
+# --- Undo / Redo ---
+# ============================
+@app.route("/people/<pid>/undo", methods=["POST"])
 def undo_person(pid):
     if pid not in root["people"] or pid not in root["versions"]:
         return jsonify({"error": "Not found"}), 404
@@ -117,56 +140,32 @@ def undo_person(pid):
     if len(versions) < 2:
         return jsonify({"error": "No undo"}), 400
 
-    # Lấy bản hiện tại đưa vào redo stack
     current_version = versions.pop()
-    if pid not in root["redo_stack"]:
-        root["redo_stack"][pid] = []
     root["redo_stack"][pid].append(current_version)
 
-    # Quay lại bản trước đó
     last_version = versions[-1]
     person = root["people"][pid]
     person.name = last_version["name"]
     person.age = last_version["age"]
-
     transaction.commit()
-    return jsonify({"status": "undo", "current_version": last_version ,"history": versions})
 
+    return jsonify({"status": "undo", "current_version": last_version, "history": versions})
 
-@app.route("/people/<pid>/redo", methods=["GET","POST"])
+@app.route("/people/<pid>/redo", methods=["POST"])
 def redo_person(pid):
     if pid not in root["people"] or pid not in root["redo_stack"]:
         return jsonify({"error": "No redo"}), 404
-
     if len(root["redo_stack"][pid]) == 0:
         return jsonify({"error": "Redo stack empty"}), 400
 
-    # Lấy lại bản từ redo stack
     version = root["redo_stack"][pid].pop()
     person = root["people"][pid]
     person.name = version["name"]
     person.age = version["age"]
-
-    # Sau khi redo, push vào history (không reset redo stack)
     root["versions"][pid].append({"name": person.name, "age": person.age})
-
     transaction.commit()
-    return jsonify({"status": "redo", "current_version": version,"history": root["versions"][pid]})
 
-@app.route("/replicate", methods=["POST"])
-def replicate():
-    data = request.json
-    target_nodes = data.get("nodes", ["node_A", "node_B", "node_C"])
-    result = {}
-    for node in target_nodes:
-        # Giả lập trạng thái random: synced hoặc error
-        import random
-        status = random.choice(["synced", "pending", "error"])
-        result[node] = status
-    root["last_replication"] = result
-    transaction.commit()
-    return jsonify({"status": "replication started", "nodes": result}) 
-
+    return jsonify({"status": "redo", "current_version": version, "history": root["versions"][pid]})
 
 @app.route("/people/<pid>/history", methods=["GET"])
 def person_history(pid):
@@ -174,7 +173,48 @@ def person_history(pid):
         return jsonify({"error": "No history"}), 404
     return jsonify(root["versions"][pid])
 
+# ============================
+# --- Replication Realistic ---
+# ============================
+@app.route("/run-replication", methods=["POST"])
+def run_replication():
+    global replication_status
+    source = get_db_path(PRIMARY_NODE)
+    for node in NODES:
+        if node == PRIMARY_NODE:
+            continue
+        try:
+            replication_status[node] = "pending"
+            shutil.copy2(source, get_db_path(node))
+            replication_status[node] = "synced"
+        except Exception as e:
+            replication_status[node] = "error"
+            print(f"Error replicating to {node}: {e}")
+    root["last_replication"] = replication_status
+    transaction.commit()
+    return jsonify(replication_status)
 
+@app.route("/replication-status", methods=["GET"])
+def replication_status_api():
+    return jsonify(root.get("last_replication", replication_status))
+
+# --- Simulate Failover ---
+@app.route("/simulate-failure", methods=["POST"])
+def simulate_failure():
+    global PRIMARY_NODE
+    replication_status[PRIMARY_NODE] = "error"
+    for node in NODES:
+        if node != PRIMARY_NODE and replication_status[node] == "synced":
+            PRIMARY_NODE = node
+            return jsonify({"message": f"Primary node switched to {PRIMARY_NODE}"})
+    return jsonify({"message": "No backup available"}), 500
+
+@app.route("/restore-primary", methods=["POST"])
+def restore_primary():
+    global PRIMARY_NODE
+    PRIMARY_NODE = "node_A"
+    replication_status["node_A"] = "synced"
+    return jsonify({"message": "Primary restored to node_A"})
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
