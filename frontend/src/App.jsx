@@ -18,7 +18,7 @@ export default function App() {
   const loadPeople = async () => {
     try {
       const res = await axios.get(`${API}/people`);
-      setPeople(res.data);
+      setPeople(res.data.data || []);
     } catch (err) {
       console.error("Lỗi khi gọi API:", err);
     }
@@ -134,23 +134,15 @@ export default function App() {
   };
 
   const disconnectNode = async () => {
-    try {
-      await axios.post(`${API}/failover/disconnect`);
-      setIsNodeDown(true);
-      alert("Node chính đã bị ngắt kết nối!");
-    } catch {
-      alert("Lỗi khi ngắt kết nối node chính");
-    }
+    await axios.post(`${API}/simulate-failure`);
+    setIsNodeDown(true);
+    alert("Node chính đã bị ngắt kết nối!");
   };
 
   const reconnectNode = async () => {
-    try {
-      await axios.post(`${API}/failover/reconnect`);
-      setIsNodeDown(false);
-      alert("Node chính đã được khôi phục!");
-    } catch {
-      alert("Lỗi khi khôi phục node chính");
-    }
+    await axios.post(`${API}/restore-primary`);
+    setIsNodeDown(false);
+    alert("Node chính đã được khôi phục!");
   };
 
   return (
