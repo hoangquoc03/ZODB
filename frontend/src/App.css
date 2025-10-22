@@ -350,3 +350,21 @@ button {
 .modal-overlay > .modal > ul > li {
   list-style-type: none;
 }
+.node-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.node-role.primary {
+  color: #00c853;
+  font-weight: bold;
+}
+
+.node-role.replica {
+  color: #ff6d00;
+  font-weight: bold;
+}
+.database {
+  color: blue;
+}

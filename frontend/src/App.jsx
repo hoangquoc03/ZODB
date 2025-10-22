@@ -13,35 +13,51 @@ export default function App() {
   const [showHistoryId, setShowHistoryId] = useState(null);
   const [isNodeDown, setIsNodeDown] = useState(false);
 
-  const API = "http://127.0.0.1:5000";
+  const [selectedNode, setSelectedNode] = useState("node_A");
+  const [role, setRole] = useState("Primary");
 
+  const API = {
+    node_A: "http://127.0.0.1:5000",
+    node_B: "http://127.0.0.1:5001",
+    node_C: "http://127.0.0.1:5002",
+  };
+
+  // ==== LOAD DỮ LIỆU THEO NODE ====
   const loadPeople = async () => {
     try {
-      const res = await axios.get(`${API}/people`);
+      const res = await axios.get(`${API[selectedNode]}/people`);
       setPeople(res.data.data || []);
+      setRole(res.data.role || "Replica");
     } catch (err) {
       console.error("Lỗi khi gọi API:", err);
+      setPeople([]);
     }
   };
 
   const loadReplicationStatus = async () => {
     try {
-      const res = await axios.get(`${API}/replication-status`);
+      const res = await axios.get(`${API.node_A}/replication-status`);
       setReplication(res.data);
     } catch (err) {
       console.error("Lỗi lấy replication:", err);
     }
   };
 
+  // ==== Auto refresh mỗi 3 giây ====
   useEffect(() => {
     loadPeople();
     loadReplicationStatus();
-  }, []);
+    const interval = setInterval(() => {
+      loadReplicationStatus();
+      loadPeople();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [selectedNode]);
 
   // ==== Undo / Redo / CRUD ====
   const undoPerson = async (id) => {
     try {
-      const res = await axios.post(`${API}/people/${id}/undo`);
+      const res = await axios.post(`${API[selectedNode]}/people/${id}/undo`);
       loadPeople();
       setHistory(res.data.history);
       setShowHistoryId(id);
@@ -52,7 +68,7 @@ export default function App() {
 
   const redoPerson = async (id) => {
     try {
-      const res = await axios.post(`${API}/people/${id}/redo`);
+      const res = await axios.post(`${API[selectedNode]}/people/${id}/redo`);
       loadPeople();
       setHistory(res.data.history);
       setShowHistoryId(id);
@@ -63,7 +79,7 @@ export default function App() {
 
   const viewHistory = async (id) => {
     try {
-      const res = await axios.get(`${API}/people/${id}/history`);
+      const res = await axios.get(`${API[selectedNode]}/people/${id}/history`);
       setHistory(res.data);
       setShowHistoryId(id);
     } catch {
@@ -72,7 +88,7 @@ export default function App() {
   };
 
   const deletePerson = async (id) => {
-    await axios.delete(`${API}/people/${id}`);
+    await axios.delete(`${API[selectedNode]}/people/${id}`);
     loadPeople();
   };
 
@@ -85,7 +101,10 @@ export default function App() {
 
   const addPerson = async () => {
     if (!name || !age) return alert("Nhập đủ thông tin");
-    await axios.post(`${API}/people`, { name, age: parseInt(age) });
+    await axios.post(`${API[selectedNode]}/people`, {
+      name,
+      age: parseInt(age),
+    });
     setName("");
     setAge("");
     setShowForm(false);
@@ -94,7 +113,7 @@ export default function App() {
 
   const updatePerson = async () => {
     if (!editId) return;
-    await axios.put(`${API}/people/${editId}`, {
+    await axios.put(`${API[selectedNode]}/people/${editId}`, {
       name,
       age: parseInt(age),
     });
@@ -122,7 +141,7 @@ export default function App() {
   // ==== Phân tán ====
   const runReplication = async () => {
     try {
-      const res = await axios.post(`${API}/run-replication`, {
+      const res = await axios.post(`${API[selectedNode]}/run-replication`, {
         nodes: ["node_A", "node_B", "node_C"],
       });
       console.log("Replication:", res.data);
@@ -134,13 +153,13 @@ export default function App() {
   };
 
   const disconnectNode = async () => {
-    await axios.post(`${API}/simulate-failure`);
+    await axios.post(`${API.node_A}/simulate-failure`);
     setIsNodeDown(true);
     alert("Node chính đã bị ngắt kết nối!");
   };
 
   const reconnectNode = async () => {
-    await axios.post(`${API}/restore-primary`);
+    await axios.post(`${API.node_A}/restore-primary`);
     setIsNodeDown(false);
     alert("Node chính đã được khôi phục!");
   };
@@ -148,12 +167,30 @@ export default function App() {
   return (
     <div className="app-container">
       <nav className="navigator">
-        <button>Danh sách nhân viên</button>
-        <button>Danh sách khách hàng</button>
+        <h2> Hệ thống ZODB Replication</h2>
+        <div className="node-selector">
+          <label> Xem dữ liệu tại node:</label>
+          <select
+            value={selectedNode}
+            onChange={(e) => setSelectedNode(e.target.value)}
+          >
+            <option value="node_A">Node A</option>
+            <option value="node_B">Node B</option>
+            <option value="node_C">Node C</option>
+          </select>
+          <span
+            className={`node-role ${
+              role === "Primary" ? "primary" : "replica"
+            }`}
+          >
+            {role === "Primary" ? " Primary" : " Replica"}
+          </span>
+        </div>
       </nav>
 
       <div className="content">
-        <h2> Danh sách nhân viên</h2>
+        <h2>Danh sách nhân viên ({selectedNode})</h2>
+
         <div className="replication-status">
           <h4>Replication Status</h4>
           {Object.entries(replication).map(([node, status]) => (
@@ -175,23 +212,24 @@ export default function App() {
               </span>
             </div>
           ))}
+
           <div className="replication-buttons">
             <button onClick={runReplication} className="btn-replicate">
-              🔄 Chạy Replication
+              Chạy Replication
             </button>
             <button
               onClick={disconnectNode}
               className="btn-fail"
               disabled={isNodeDown}
             >
-              ❌ Mất kết nối node chính
+              Mất kết nối node chính
             </button>
             <button
               onClick={reconnectNode}
               className="btn-recover"
               disabled={!isNodeDown}
             >
-              ✅ Khôi phục node chính
+              Khôi phục node chính
             </button>
           </div>
         </div>
@@ -199,8 +237,9 @@ export default function App() {
         <button className="btn-add" onClick={openAddForm}>
           Thêm nhân viên
         </button>
+
         {people.length === 0 ? (
-          <p>Chưa có dữ liệu trong ZODB</p>
+          <p className="database"> Chưa có dữ liệu trong node {selectedNode}</p>
         ) : (
           <table className="people-table">
             <thead>

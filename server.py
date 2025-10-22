@@ -1,10 +1,10 @@
-
+# server.py
 import argparse
 import json
 import os
 import threading
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 from flask import Flask, jsonify, request
@@ -120,7 +120,7 @@ if "redo_stack" not in root:
 transaction.commit()
 
 # -------------------------
-# Utility functions
+# Utility functions / history management
 # -------------------------
 def get_local_people_list():
     """Read people from this node's ZODB root and return list of plain dicts."""
@@ -137,14 +137,30 @@ def get_local_people_list():
     return out
 
 def replace_local_people_from_list(list_people: List[Dict]):
-    """Replace this node's people with list_people (list of dicts with id,name,age)."""
-    # clear and rewrite
+    """Replace this node's people with list_people (list of dicts with id,name,age). 
+       Reset versions/redo for replaced keys to avoid mismatches."""
     ppl = OOBTree()
+    versions = root.get("versions", OOBTree())
+    redo_stack = root.get("redo_stack", OOBTree())
+
+    # build new people
     for p in list_people:
         pid = p.get("id")
-        # store as plain dict to avoid dependency on models.Person across nodes
         ppl[pid] = {"id": pid, "name": p.get("name"), "age": int(p.get("age", 0))}
+        # reset history for this pid to single snapshot (current)
+        versions[pid] = [ppl[pid].copy()]
+        redo_stack[pid] = []
+
+    # remove entries not present anymore
+    # (optional) keep as-is: we'll remove any versions/redo for missing keys
+    for existing_pid in list(root.get("versions", {}).keys()):
+        if existing_pid not in ppl:
+            versions.pop(existing_pid, None)
+            redo_stack.pop(existing_pid, None)
+
     root["people"] = ppl
+    root["versions"] = versions
+    root["redo_stack"] = redo_stack
     transaction.commit()
 
 def is_primary() -> bool:
@@ -157,6 +173,68 @@ def update_replication_status_for(node_name: str, status: str):
     rs[node_name] = status
     state["replication_status"] = rs
     write_cluster_state(state)
+
+# History helpers
+def _ensure_history_structures():
+    if "versions" not in root:
+        root["versions"] = OOBTree()
+    if "redo_stack" not in root:
+        root["redo_stack"] = OOBTree()
+
+def push_version(pid: str, snapshot: Optional[Dict]):
+    """Append snapshot (dict or None) to versions[pid]. snapshot should represent current state after op.
+       We store full snapshots. If snapshot is None -> represent deletion."""
+    _ensure_history_structures()
+    versions = root["versions"]
+    if pid not in versions:
+        versions[pid] = []
+    versions[pid].append(None if snapshot is None else snapshot.copy())
+    transaction.commit()
+
+def clear_redo(pid: str):
+    _ensure_history_structures()
+    redo = root["redo_stack"]
+    redo[pid] = []
+    transaction.commit()
+
+def push_redo(pid: str, snapshot: Optional[Dict]):
+    _ensure_history_structures()
+    redo = root["redo_stack"]
+    if pid not in redo:
+        redo[pid] = []
+    redo[pid].append(None if snapshot is None else snapshot.copy())
+    transaction.commit()
+
+def pop_redo(pid: str) -> Optional[Dict]:
+    _ensure_history_structures()
+    redo = root["redo_stack"]
+    if pid not in redo or len(redo[pid]) == 0:
+        return None
+    item = redo[pid].pop()
+    transaction.commit()
+    return item
+
+def pop_version(pid: str) -> Optional[Dict]:
+    _ensure_history_structures()
+    versions = root["versions"]
+    if pid not in versions or len(versions[pid]) <= 1:
+        # if only one (or zero) version, cannot pop to previous
+        return None
+    # pop latest and return it
+    latest = versions[pid].pop()
+    transaction.commit()
+    return latest
+
+def get_history_list(pid: str) -> List[Dict]:
+    _ensure_history_structures()
+    versions = root["versions"]
+    if pid not in versions:
+        return []
+    # return copies to avoid exposing persistent objects
+    out = []
+    for v in versions[pid]:
+        out.append(None if v is None else v.copy())
+    return out
 
 # -------------------------
 # Endpoints: Admin / debug
@@ -172,11 +250,9 @@ def whoami():
     })
 
 # -------------------------
-# CRUD Endpoints
-# - If this node is primary, writes will optionally trigger replication (background)
-# - Reads return local data
+# CRUD Endpoints with history tracking
 # -------------------------
-AUTO_REPLICATE_AFTER_WRITE = True  # set True to auto push after writes
+AUTO_REPLICATE_AFTER_WRITE = False  # set False: manual replication via /run-replication
 
 def background_replicate(payload):
     """Send payload (list of dicts) to all replicas (not including primary)."""
@@ -200,24 +276,34 @@ def background_replicate(payload):
 def get_people():
     """Read from local node (replica read allowed)."""
     data = get_local_people_list()
-    return jsonify({"source": NODE_NAME, "data": data})
+    state = read_cluster_state()
+    role = "Primary" if state.get("primary") == NODE_NAME else "Replica"
+    return jsonify({
+        "source": NODE_NAME,
+        "data": data,
+        "role": role,
+        "primary": state.get("primary")
+    })
 
 @app.route("/people", methods=["POST"])
 def add_person():
-    """Add person to local DB. If this node is primary -> trigger replication to others."""
     payload = request.json or {}
     name = payload.get("name")
     age = int(payload.get("age", 0))
-    # generate new key locally
     people = root["people"]
     new_key = f"p{len(people) + 1}"
-    # store as simple dict to avoid pickling issues across different code versions
-    people[new_key] = {"id": new_key, "name": name, "age": age}
+    new_obj = {"id": new_key, "name": name, "age": age}
+    people[new_key] = new_obj
     transaction.commit()
 
-    # auto replicate if this node is primary
+    # record initial version (snapshot after creation)
+    _ensure_history_structures()
+    root["versions"][new_key] = [new_obj.copy()]
+    root["redo_stack"][new_key] = []
+    transaction.commit()
+
+    # optionally replicate (disabled by default)
     if is_primary() and AUTO_REPLICATE_AFTER_WRITE:
-        # prepare payload and background thread
         payload_list = get_local_people_list()
         threading.Thread(target=background_replicate, args=(payload_list,), daemon=True).start()
 
@@ -229,15 +315,30 @@ def update_person(pid):
         return jsonify({"error": "Not found"}), 404
     data_json = request.json or {}
     p = root["people"][pid]
-    # p may be dict or object-like
+    # take snapshot of current before change
+    prev_snapshot = p.copy() if isinstance(p, dict) else {"id": pid, "name": getattr(p, "name", ""), "age": getattr(p, "age", 0)}
+    # apply changes
     if isinstance(p, dict):
         p["name"] = data_json.get("name", p.get("name"))
         p["age"] = int(data_json.get("age", p.get("age", 0)))
         root["people"][pid] = p
     else:
-        # if persistent object with attributes
         setattr(p, "name", data_json.get("name", getattr(p, "name", "")))
         setattr(p, "age", int(data_json.get("age", getattr(p, "age", 0))))
+    transaction.commit()
+
+    # push previous snapshot to versions (we keep versions as snapshots in chronological order)
+    _ensure_history_structures()
+    # if versions not exist, initialize with previous and current
+    if pid not in root["versions"]:
+        root["versions"][pid] = [prev_snapshot.copy(), (root["people"][pid] if isinstance(root["people"][pid], dict) else {"id": pid, "name": getattr(root["people"][pid], "name", ""), "age": getattr(root["people"][pid], "age", 0)})]
+    else:
+        # append snapshot AFTER change (we want history to represent states over time)
+        # append the new current state
+        current_state = root["people"][pid] if isinstance(root["people"][pid], dict) else {"id": pid, "name": getattr(root["people"][pid], "name", ""), "age": getattr(root["people"][pid], "age", 0)}
+        root["versions"][pid].append(current_state.copy())
+    # clear redo stack (new action invalidates redo)
+    root["redo_stack"][pid] = []
     transaction.commit()
 
     if is_primary() and AUTO_REPLICATE_AFTER_WRITE:
@@ -249,11 +350,83 @@ def update_person(pid):
 def delete_person(pid):
     if pid not in root["people"]:
         return jsonify({"error": "Not found"}), 404
+    # snapshot before deletion
+    prev_snapshot = root["people"][pid].copy() if isinstance(root["people"][pid], dict) else {"id": pid, "name": getattr(root["people"][pid], "name", ""), "age": getattr(root["people"][pid], "age", 0)}
+    # push a 'deletion' state (we model deletion as None snapshot or keep prev then None)
+    _ensure_history_structures()
+    if pid not in root["versions"]:
+        root["versions"][pid] = [prev_snapshot]
+    root["versions"][pid].append(None)  # None represents deleted state
+    # clear redo stack
+    root["redo_stack"][pid] = []
+    # perform deletion
     del root["people"][pid]
     transaction.commit()
+
     if is_primary() and AUTO_REPLICATE_AFTER_WRITE:
         threading.Thread(target=background_replicate, args=(get_local_people_list(),), daemon=True).start()
     return jsonify({"status": "deleted", "id": pid})
+
+# -------------------------
+# History / Undo / Redo endpoints
+# -------------------------
+@app.route("/people/<pid>/history", methods=["GET"])
+def get_person_history(pid):
+    hist = get_history_list(pid)
+    # convert None -> {"deleted": true} for clarity
+    out = []
+    for v in hist:
+        out.append({"state": None} if v is None else v)
+    return jsonify(out)
+
+@app.route("/people/<pid>/undo", methods=["POST"])
+def undo_person(pid):
+    _ensure_history_structures()
+    versions = root["versions"]
+    if pid not in versions or len(versions[pid]) <= 1:
+        return jsonify({"error": "No previous version to undo"}), 400
+
+    # pop latest (current) and get previous (now last element)
+    latest = versions[pid].pop()  # latest state removed
+    prev = versions[pid][-1] if len(versions[pid]) > 0 else None
+
+    # push the removed latest to redo stack
+    redo = root["redo_stack"]
+    if pid not in redo:
+        redo[pid] = []
+    redo[pid].append(latest)
+
+    # apply prev to people: if prev is None => deletion; else set to prev
+    if prev is None:
+        # delete if exists
+        root["people"].pop(pid, None)
+    else:
+        root["people"][pid] = prev.copy()
+
+    transaction.commit()
+    return jsonify({"status": "undone", "id": pid, "history": get_history_list(pid)})
+
+@app.route("/people/<pid>/redo", methods=["POST"])
+def redo_person(pid):
+    _ensure_history_structures()
+    redo = root["redo_stack"]
+    if pid not in redo or len(redo[pid]) == 0:
+        return jsonify({"error": "No redo available"}), 400
+
+    item = redo[pid].pop()  # item is the state we previously undid (could be None)
+    # append item to versions (it becomes latest)
+    if pid not in root["versions"]:
+        root["versions"][pid] = []
+    root["versions"][pid].append(item if item is None else item.copy())
+
+    # apply item to people
+    if item is None:
+        root["people"].pop(pid, None)
+    else:
+        root["people"][pid] = item.copy()
+
+    transaction.commit()
+    return jsonify({"status": "redone", "id": pid, "history": get_history_list(pid)})
 
 # -------------------------
 # Endpoint for receiving replication payload
@@ -262,9 +435,8 @@ def delete_person(pid):
 @app.route("/sync-data", methods=["POST"])
 def sync_data():
     data = request.json or []
-    # Replace local people with payload
+    # Replace local people with payload and reset versions/redo for replaced pids
     replace_local_people_from_list(data)
-    # optionally reset replication status for this node to synced
     update_replication_status_for(NODE_NAME, "synced")
     return jsonify({"status": "synced", "node": NODE_NAME, "count": len(data)})
 
@@ -304,9 +476,6 @@ def replication_status():
 
 # -------------------------
 # Failover simulation endpoints
-# - simulate-failure: mark current primary as 'error' and elect a backup (first synced)
-# - restore-primary: set primary back to node_A (or to requested name)
-# These update cluster_state file so all nodes see the new primary.
 # -------------------------
 @app.route("/simulate-failure", methods=["POST"])
 def simulate_failure():
@@ -322,7 +491,6 @@ def simulate_failure():
             new_primary = n
             break
     if not new_primary:
-        # no available backup
         write_cluster_state(state)
         return jsonify({"message": "No backup available"}), 500
 
@@ -333,12 +501,10 @@ def simulate_failure():
 
 @app.route("/restore-primary", methods=["POST"])
 def restore_primary():
-    # restore primary to node_A by default or to query param name
     body = request.json or {}
     restore_to = body.get("node", "node_A")
     state = read_cluster_state()
     state["primary"] = restore_to
-    # mark restored node as synced
     rs = state.get("replication_status", {})
     rs[restore_to] = "synced"
     state["replication_status"] = rs
@@ -369,4 +535,3 @@ if __name__ == "__main__":
     print("Cluster state file:", CLUSTER_STATE_FILE)
     _ = read_cluster_state()
     app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
-
