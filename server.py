@@ -538,7 +538,7 @@ def simulate_failure():
     state["primary"] = new_primary
     state["replication_status"] = rs
     write_cluster_state(state)
-    return jsonify({"message": f"Primary switched from {current_primary} -> {new_primary}", "primary": new_primary})
+    return jsonify({"message": f"Node chính chuyển từ {current_primary} -> {new_primary}", "primary": new_primary})
 
 @app.route("/restore-primary", methods=["POST"])
 def restore_primary():
@@ -550,7 +550,7 @@ def restore_primary():
     rs[restore_to] = "synced"
     state["replication_status"] = rs
     write_cluster_state(state)
-    return jsonify({"message": f"Primary restored to {restore_to}"})
+    return jsonify({"message": f"Node chính đã được khôi phục thành {restore_to}"})
 
 
 import atexit

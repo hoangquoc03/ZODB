@@ -12,6 +12,7 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [showHistoryId, setShowHistoryId] = useState(null);
   const [isNodeDown, setIsNodeDown] = useState(false);
+  const [clusterState, setClusterState] = useState({});
 
   const [selectedNode, setSelectedNode] = useState("node_A");
   const [role, setRole] = useState("Primary");
@@ -156,12 +157,34 @@ export default function App() {
     await axios.post(`${API.node_A}/simulate-failure`);
     setIsNodeDown(true);
     alert("Node chính đã bị ngắt kết nối!");
+    await fetchClusterState();
   };
 
   const reconnectNode = async () => {
-    await axios.post(`${API.node_A}/restore-primary`);
-    setIsNodeDown(false);
-    alert("Node chính đã được khôi phục!");
+    try {
+      const res = await axios.post(`${API.node_A}/restore-primary`, {
+        node: "node_A", // hoặc selectedNode nếu bạn muốn linh hoạt
+      });
+      alert(res.data.message);
+
+      // ✅ Làm mới trạng thái cluster và dữ liệu
+      await fetchClusterState();
+      await loadPeople();
+      await loadReplicationStatus();
+
+      setIsNodeDown(false);
+    } catch (err) {
+      console.error(err);
+      alert("Không thể khôi phục node chính!");
+    }
+  };
+  const fetchClusterState = async () => {
+    try {
+      const res = await axios.get(`${API.node_A}/cluster-state`);
+      setClusterState(res.data);
+    } catch (err) {
+      console.error("Lỗi lấy cluster state:", err);
+    }
   };
 
   return (
@@ -232,6 +255,12 @@ export default function App() {
               Khôi phục node chính
             </button>
           </div>
+          <div className="cluster-info">
+            <h4></h4>
+            <p>
+              <strong>{clusterState.primary || "Chưa xác định"}</strong>
+            </p>
+          </div>
         </div>
 
         <button className="btn-add" onClick={openAddForm}>
@@ -301,7 +330,7 @@ export default function App() {
                           onClick={() => undoPerson(p.id)}
                           className="btn-undo"
                         >
-                          Khôi phục
+                          Undo
                         </button>
                         <button
                           onClick={() => viewHistory(p.id)}
