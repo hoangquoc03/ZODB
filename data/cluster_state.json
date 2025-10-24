@@ -1,7 +1,7 @@
 {
-  "primary": "node_A",
+  "primary": "node_B",
   "replication_status": {
-    "node_A": "synced",
+    "node_A": "error",
     "node_B": "synced",
     "node_C": "synced"
   }
