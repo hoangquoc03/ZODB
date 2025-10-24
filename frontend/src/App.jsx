@@ -252,38 +252,65 @@ export default function App() {
             </thead>
             <tbody>
               {people.map((p) => (
-                <tr key={p.id} className="tr">
+                <tr
+                  key={p.id}
+                  className={`tr ${p.is_deleted ? "deleted-row" : ""}`}
+                  style={{ opacity: p.is_deleted ? 0.5 : 1 }}
+                >
                   <td>{p.id}</td>
                   <td>{p.name}</td>
                   <td>{p.age}</td>
                   <td>
-                    <button
-                      onClick={() => deletePerson(p.id)}
-                      className="btn-delete"
-                    >
-                      Xóa
-                    </button>
-                    <button onClick={() => startEdit(p)} className="btn-edit">
-                      Sửa
-                    </button>
-                    <button
-                      onClick={() => undoPerson(p.id)}
-                      className="btn-undo"
-                    >
-                      Undo
-                    </button>
-                    <button
-                      onClick={() => redoPerson(p.id)}
-                      className="btn-redo"
-                    >
-                      Redo
-                    </button>
-                    <button
-                      onClick={() => viewHistory(p.id)}
-                      className="btn-history"
-                    >
-                      Lịch sử
-                    </button>
+                    {!p.is_deleted ? (
+                      <>
+                        <button
+                          onClick={() => deletePerson(p.id)}
+                          className="btn-delete"
+                        >
+                          Xóa
+                        </button>
+                        <button
+                          onClick={() => startEdit(p)}
+                          className="btn-edit"
+                        >
+                          Sửa
+                        </button>
+                        <button
+                          onClick={() => undoPerson(p.id)}
+                          className="btn-undo"
+                        >
+                          Undo
+                        </button>
+                        <button
+                          onClick={() => redoPerson(p.id)}
+                          className="btn-redo"
+                        >
+                          Redo
+                        </button>
+                        <button
+                          onClick={() => viewHistory(p.id)}
+                          className="btn-history"
+                        >
+                          Lịch sử
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="deleted-text">Đã xóa</span>
+                        <button
+                          onClick={() => undoPerson(p.id)}
+                          className="btn-undo"
+                        >
+                          Khôi phục
+                        </button>
+                        <button
+                          onClick={() => viewHistory(p.id)}
+                          className="btn-history"
+                        >
+                          Lịch sử
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
